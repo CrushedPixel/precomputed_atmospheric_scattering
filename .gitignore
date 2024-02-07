@@ -4,3 +4,4 @@ output/**
 /platform/windows/_intermediate/
 /platform/windows/external/
 !platform/windows/external/dummy.txt
+.vscode

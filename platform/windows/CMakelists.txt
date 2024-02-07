@@ -37,6 +37,10 @@ set (GLAD ${EXT}glad/)
 set (GLAD_INCLUDES ${GLAD}include)
 make_absolute(GLAD_INCLUDES)
 
+set (STB ${EXT}stb/)
+set (STB_INCLUDES ${STB}include)
+make_absolute(STB_INCLUDES)
+
 set (FREEGLUT ${EXT_WIN}freeglut/)
 set (FREEGLUT_INCLUDES ${FREEGLUT}include)
 make_absolute(FREEGLUT_INCLUDES)
@@ -98,6 +102,7 @@ set (INCLUDES
 	${ROOT_INCLUDES}
 	${GLAD_INCLUDES}
 	${FREEGLUT_INCLUDES}
+	${STB_INCLUDES}
 )
 
 set (TEXT_PATH ${TEXT})
