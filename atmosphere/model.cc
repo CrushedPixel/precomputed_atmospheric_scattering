@@ -45,13 +45,25 @@ of the following C++ code.
 
 #include <glad/glad.h>
 
+#ifndef PRECOMPUTE_DEBUG
+#define PRECOMPUTE_DEBUG 0
+#endif 
+
+#ifndef PRECOMPUTE_DEBUG_FLIP_Y
+#define PRECOMPUTE_DEBUG_FLIP_Y 0
+#endif
+
+#if PRECOMPUTE_DEBUG
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
+#endif 
 
 #include <cassert>
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <filesystem>
 
 #include "atmosphere/constants.h"
 
@@ -583,6 +595,7 @@ void ComputeSpectralRadianceToLuminanceFactors(
     double g_bar =
         xyz2srgb[3] * x_bar + xyz2srgb[4] * y_bar + xyz2srgb[5] * z_bar;
     double b_bar =
+
         xyz2srgb[6] * x_bar + xyz2srgb[7] * y_bar + xyz2srgb[8] * z_bar;
     double irradiance = Interpolate(wavelengths, solar_irradiance, lambda);
     *k_r += r_bar * irradiance / solar_r *
@@ -1042,6 +1055,58 @@ void Model::ConvertSpectrumToLinearSrgb(
       (XYZ_TO_SRGB[6] * x + XYZ_TO_SRGB[7] * y + XYZ_TO_SRGB[8] * z) * dlambda;
 }
 
+#if PRECOMPUTE_DEBUG
+// Function to capture texture data and save it as an HDR image.
+void SaveTextureAsHDR(GLuint texture_id, int texture_width, int texture_height, int pass, const char* baseFilename) {
+    // Allocate memory for texture data
+    float* pixels = new float[texture_width * texture_height * 4];
+
+    // Activate the first texture unit and bind the provided texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture_id);
+
+    // Get the texture image data
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels);
+
+    // Use std::ostringstream to build the filename with the number
+    std::ostringstream filenameStream;
+    filenameStream << "precompute_debug/" << pass << " " << baseFilename << ".exr";
+    std::string filename = filenameStream.str();
+
+    // Write the texture data to an HDR image
+    stbi_write_hdr(filename.c_str(), texture_width, texture_height, 4, pixels);
+
+    // Free the allocated memory
+    delete[] pixels;
+}
+
+// Function to capture 3D texture data and save each Z layer as a separate HDR image.
+void SaveTexture3DAsHDR(GLuint texture_id, int texture_width, int texture_height, int texture_depth, int pass, const char* baseFilename) {
+    // Allocate memory for texture data
+    float* pixels = new float[texture_width * texture_height * texture_depth * 4];
+
+    // Bind the 3D texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, texture_id);
+
+    // Get the texture image data
+    glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, pixels);
+
+    for (int z = 0; z < texture_depth; ++z) {
+        // Use std::ostringstream to build the filename with the layer number
+        std::ostringstream filenameStream;
+        filenameStream << "precompute_debug/" << pass << " " << baseFilename << "_" << z << ".exr";
+        std::string filename = filenameStream.str();
+
+        // Write the layer data to an HDR image
+        stbi_write_hdr(filename.c_str(), texture_width, texture_height, 4, pixels + (4 * z * texture_width * texture_height));
+    }
+
+    // Free the allocated memory
+    delete[] pixels;
+}
+#endif
+
 /*
 <p>Finally, we provide the actual implementation of the precomputation algorithm
 described in Algorithm 4.1 of
@@ -1059,6 +1124,7 @@ void Model::Precompute(
     const mat3& luminance_from_radiance,
     bool blend,
     unsigned int num_scattering_orders) {
+
   // The precomputations require specific GLSL programs, for each precomputation
   // step. We create and compile them here (they are automatically destroyed
   // when this method returns, via the Program destructor).
@@ -1093,6 +1159,14 @@ void Model::Precompute(
   compute_transmittance.Use();
   DrawQuad({}, full_screen_quad_vao_);
 
+#if PRECOMPUTE_DEBUG
+#if PRECOMPUTE_DEBUG_FLIP_Y
+    stbi__flip_vertically_on_write = true;
+#endif
+  std::filesystem::create_directories("precompute_debug");
+  SaveTextureAsHDR(transmittance_texture_, TRANSMITTANCE_TEXTURE_WIDTH, TRANSMITTANCE_TEXTURE_HEIGHT, 1, "Transmittance");
+#endif
+
   // Compute the direct irradiance, store it in delta_irradiance_texture and,
   // depending on 'blend', either initialize irradiance_texture_ with zeros or
   // leave it unchanged (we don't want the direct irradiance in
@@ -1107,6 +1181,11 @@ void Model::Precompute(
   compute_direct_irradiance.BindTexture2d(
       "transmittance_texture", transmittance_texture_, 0);
   DrawQuad({false, blend}, full_screen_quad_vao_);
+
+#if PRECOMPUTE_DEBUG
+  SaveTextureAsHDR(delta_irradiance_texture, IRRADIANCE_TEXTURE_WIDTH, IRRADIANCE_TEXTURE_HEIGHT, 2, "DeltaIrradiance");
+  SaveTextureAsHDR(irradiance_texture_, IRRADIANCE_TEXTURE_WIDTH, IRRADIANCE_TEXTURE_HEIGHT, 2, "Irradiance");
+#endif
 
   // Compute the rayleigh and mie single scattering, store them in
   // delta_rayleigh_scattering_texture and delta_mie_scattering_texture, and
@@ -1135,6 +1214,13 @@ void Model::Precompute(
     compute_single_scattering.BindInt("layer", layer);
     DrawQuad({false, false, blend, blend}, full_screen_quad_vao_);
   }
+
+#if PRECOMPUTE_DEBUG
+  SaveTexture3DAsHDR(delta_rayleigh_scattering_texture, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 3, "DeltaRayleighScattering");
+  SaveTexture3DAsHDR(delta_mie_scattering_texture, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 3, "DeltaMieScattering");
+  SaveTexture3DAsHDR(optional_single_mie_scattering_texture_, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 3, "SingleMieScattering");
+  SaveTexture3DAsHDR(scattering_texture_, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 3, "Scattering");
+#endif
 
   // Compute the 2nd, 3rd and 4th order of scattering, in sequence.
   for (unsigned int scattering_order = 2;
@@ -1168,6 +1254,10 @@ void Model::Precompute(
       DrawQuad({}, full_screen_quad_vao_);
     }
 
+#if PRECOMPUTE_DEBUG
+  SaveTexture3DAsHDR(delta_scattering_density_texture, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 40 + (scattering_order - 2), "DeltaScatteringDensity");
+#endif
+
     // Compute the indirect irradiance, store it in delta_irradiance_texture and
     // accumulate it in irradiance_texture_.
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -1191,6 +1281,11 @@ void Model::Precompute(
         scattering_order - 1);
     DrawQuad({false, true}, full_screen_quad_vao_);
 
+#if PRECOMPUTE_DEBUG
+  SaveTextureAsHDR(delta_irradiance_texture, IRRADIANCE_TEXTURE_WIDTH, IRRADIANCE_TEXTURE_HEIGHT, 50 + (scattering_order - 2), "DeltaIrradiance");
+  SaveTextureAsHDR(irradiance_texture_, IRRADIANCE_TEXTURE_WIDTH, IRRADIANCE_TEXTURE_HEIGHT, 50 + (scattering_order - 2), "Irradiance");
+#endif
+
     // Compute the multiple scattering, store it in
     // delta_multiple_scattering_texture, and accumulate it in
     // scattering_texture_.
@@ -1211,16 +1306,16 @@ void Model::Precompute(
       compute_multiple_scattering.BindInt("layer", layer);
       DrawQuad({false, true}, full_screen_quad_vao_);
     }
+
+#if PRECOMPUTE_DEBUG
+  SaveTexture3DAsHDR(scattering_texture_, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 60 + (scattering_order - 2), "Scattering");
+  SaveTexture3DAsHDR(delta_multiple_scattering_texture, SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH, 60 + (scattering_order - 2), "DeltaMultipleScattering");
+#endif
   }
+
   glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, 0, 0);
   glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, 0, 0);
   glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, 0, 0);
-
-  float* pixels = new float[TRANSMITTANCE_TEXTURE_WIDTH * TRANSMITTANCE_TEXTURE_HEIGHT * 4];
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, transmittance_texture_);
-  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels);
-  stbi_write_hdr("transmittance.exr", TRANSMITTANCE_TEXTURE_WIDTH, TRANSMITTANCE_TEXTURE_HEIGHT, 4, pixels);
 }
 
 }  // namespace atmosphere

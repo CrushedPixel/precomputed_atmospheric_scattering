@@ -1,5 +1,8 @@
 cmake_minimum_required (VERSION 3.5)
 
+# C++17 required for <filesystem> API
+set (CMAKE_CXX_STANDARD 17)
+
 macro(make_absolute files)
 	set (_out)
 	foreach(file ${${files}})
@@ -94,6 +97,8 @@ set(PROJSRC ${SRC})
 set (DEFINITIONS
 	_CRT_SECURE_NO_WARNINGS
 	NOMINMAX
+	PRECOMPUTE_DEBUG=1
+	PRECOMPUTE_DEBUG_FLIP_Y=1
 )
 make_definitions(DEFINITIONS)
 
